@@ -1,0 +1,221 @@
+---
+title: "MA575 Project"
+author: "Data Scientist"
+date: "2023-10-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+# install.packages("rms")
+# install.packages("mice")
+# install.packages("glmnet")
+# library(rms)
+
+setwd("/Users/dlwlgns1/Desktop/MA575/MA575 Project")
+
+```
+
+```{r}
+
+library(tidyverse)
+library(GGally)
+library(car)
+library(ggplot2)
+library(MASS)
+library(mice)
+library(MLmetrics)
+library(caret)
+library(glmnet)
+
+```
+
+```{r}
+
+Facebook <- read.csv("facebook_updated.csv", header=TRUE, as.is=TRUE, sep=',')
+
+na_row <- which(is.na(Facebook$Paid)) # remove missing values
+
+Facebook <- Facebook[-na_row, ] # new data set
+
+# Create a Categorical Variable
+
+Facebook$Category <- as.character(Facebook$Category)
+
+Facebook$season <- NA # create a new variable called `season`
+Facebook$season[Facebook$Post.Month <= 2] <- "winter"
+Facebook$season[Facebook$Post.Month > 11] <- "winter"
+Facebook$season[Facebook$Post.Month >= 3 & Facebook$Post.Month < 6] <- "spring"
+Facebook$season[Facebook$Post.Month > 5 & Facebook$Post.Month < 9] <- "summer"
+Facebook$season[Facebook$Post.Month > 8 & Facebook$Post.Month < 12] <- "autumn"
+
+Facebook$weekday <- NA # create a new variable called `weekday`
+Facebook$weekday[Facebook$Post.Weekday < 6] <- 1 # 1 for weekdays
+Facebook$weekday[Facebook$Post.Weekday > 5] <- 0 # 0 for weekends
+
+Facebook$worktime <- 0 # 0 for not worktime
+Facebook$worktime[Facebook$Post.Hour > 9 & Facebook$Post.Hour < 18] <- 1 # 1 for worktime
+
+# Transformation
+
+Facebook$ln.Page.Total.likes <- log(Facebook$Page.total.likes) # transformation on the variable `Page Total Likes` with the use of logarithm
+Facebook$ln.Lifetime.Post.Consumers <- log(Facebook$Lifetime.Post.Consumers) # transformation on the response variable `Lifetime Post Consumers`
+
+```
+
+```{r}
+
+# Density Plot of Page Total Likes
+plot(density(Facebook$Page.total.likes), main = "Density Plot of Page Total Likes")
+
+# Density Plot of Log-transformed Page Total Likes
+plot(density(Facebook$ln.Page.Total.likes), main = "Density Plot of Log-transformed Page Total Likes")
+
+```
+
+
+```{r}
+
+# Create Training and Validation Data Set
+
+training_data <- subset(Facebook, obs_type == "Training")
+validation_data <- subset(Facebook, obs_type == "Validation")
+
+# Model Selection
+
+m.mlr <- lm(ln.Lifetime.Post.Consumers ~ ln.Page.Total.likes*Type + ln.Page.Total.likes*Category + ln.Page.Total.likes*Paid + ln.Page.Total.likes*season + ln.Page.Total.likes*weekday + ln.Page.Total.likes*worktime, data = training_data) # full model
+
+stepwise <- stepAIC(m.mlr, direction = "both") 
+
+stepwise_model <- lm(ln.Lifetime.Post.Consumers ~ ln.Page.Total.likes + Type + Category + Paid + season + worktime + ln.Page.Total.likes:Type + ln.Page.Total.likes:season + ln.Page.Total.likes:worktime, data = training_data) 
+# model based on the stepwise process
+
+summary(stepwise_model)
+
+```
+
+```{r}
+
+# Scatterplot Matrix
+co_data <- data.frame(Facebook$`Lifetime.Post.Consumers`, Facebook$`Page.total.likes`, Facebook$`Type`, Facebook$`Category`, Facebook$`season`, Facebook$`weekday`, Facebook$`worktime`, Facebook$`Paid`)
+
+co_data1 <- data.frame(Facebook$Lifetime.Post.Consumers, Facebook$Page.total.likes, Facebook$Type, Facebook$season, Facebook$Paid)
+
+
+ggpairs(co_data, 
+        upper=list(continuous=wrap("points", alpha=0.3, size=0.1)),
+        lower=list(continuous=wrap('cor', size=7)))
+
+ggpairs(co_data1, 
+        upper=list(continuous=wrap("points", alpha=0.3, size=0.1)),
+        lower=list(continuous=wrap('cor', size=4)))
+
+```
+
+```{r}
+
+m.mlr <- lm(ln.Lifetime.Post.Consumers ~ Type + Paid + ln.Page.Total.likes + season:ln.Page.Total.likes, data = training_data) # final model
+
+summary(m.mlr)
+
+```
+
+```{r}
+
+# Diagnostic Plots
+plot(m.mlr)
+
+```
+
+```{r}
+
+# Added-Variable Plots
+avPlots(m.mlr)
+
+```
+
+```{r}
+
+# Variation Inflation Factor
+vif(m.mlr)
+
+```
+
+```{r}
+
+# Lasso Regression
+
+lasso_regression <- glmnet(x = model.matrix(m.mlr)[,-1], y = training_data$ln.Lifetime.Post.Consumers, alpha = 1)
+
+plot(lasso_regression, xvar = "lambda", label = TRUE)
+
+cv_model <- cv.glmnet(x = model.matrix(m.mlr)[,-1], y = training_data$ln.Lifetime.Post.Consumers, alpha = 1)
+
+best_lambda <- cv_model$lambda.min # best lambda value
+cat("Best Lambda - LASSO:", best_lambda)
+lasso_coef <- coef(lasso_regression, s = best_lambda)
+print(round(lasso_coef,8))
+
+```
+
+```{r}
+
+# Ridge Regression
+
+ridge_regression <- glmnet(x = model.matrix(m.mlr)[,-1], y = training_data$ln.Lifetime.Post.Consumers, alpha = 0)
+
+plot(ridge_regression, xvar = "lambda", label = TRUE)
+
+cv_model <- cv.glmnet(x = model.matrix(m.mlr)[,-1], y = training_data$ln.Lifetime.Post.Consumers, alpha = 0)
+
+best_lambda <- cv_model$lambda.min #best lambda value
+cat("Best Lambda - Ridge:", best_lambda)
+ridge_coef <- coef(ridge_regression, s = best_lambda)
+print(round(ridge_coef,8))
+
+```
+
+```{r}
+
+# Prediction
+
+validation_data$Predicted_ln.Lifetime.Post.Consumers <- predict(m.mlr, newdata = validation_data) # predicting the response variable `ln.Lifetime.Post.Consumers`
+
+observed_values <- validation_data$ln.Lifetime.Post.Consumers # observed values
+predicted_values <- validation_data$Predicted_ln.Lifetime.Post.Consumers # predicted values
+
+rmse <- RMSE(predicted_values, observed_values)
+mae <- MAE(predicted_values, observed_values)
+r_squared <- R2_Score(predicted_values, observed_values)
+
+cat("Root Mean Squared Error (RMSE):", round(rmse, digits = 4))
+cat("Mean Absolute Error (MAE):", round(mae, digits = 4))
+cat("R-squared (R^2) Score:", round(r_squared, digits = 4))
+
+```
+
+```{r}
+
+# Observed vs. Predicted Values Plot
+ggplot(validation_data, aes(x = ln.Lifetime.Post.Consumers, y = Predicted_ln.Lifetime.Post.Consumers)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  labs(x = "Observed Values", y = "Predicted Values", title = "Observed vs. Predicted Values") +
+  xlim(c(2,10)) +
+  ylim(c(4,8)) +
+  theme_bw()
+```
+
+```{r}
+
+# Residual Plot
+ggplot(validation_data, aes(x = 1:nrow(validation_data), y = ln.Lifetime.Post.Consumers-Predicted_ln.Lifetime.Post.Consumers)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 0, color = "red", linetype = "dashed") +
+  labs(x = "Observation Index", y = "Residuals", title = "Residual Plot") +
+  theme_bw()
+
+```
+
